@@ -1,0 +1,3409 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vindi Pix Hub • Gestão de Produtos, Cobranças Pix e Split de Pagamentos</title>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Fonte Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- React 18 & ReactDOM 18 (Produção UMD para GitHub Pages) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel Standalone para transpilar JSX no navegador -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Lucide Icons (Vanilla UMD) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.2s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // ========================================================================
+    // ADAPTADOR DE ÍCONES LUCIDE PARA REACT STANDALONE (GITHUB PAGES)
+    // ========================================================================
+    const LucideIcon = ({ name, className = "w-4 h-4", ...props }) => {
+      const spanRef = useRef(null);
+
+      useEffect(() => {
+        if (!spanRef.current || !window.lucide) return;
+        const kebabName = name
+          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+          .toLowerCase();
+        spanRef.current.innerHTML = `<i data-lucide="${kebabName}" class="${className}"></i>`;
+        window.lucide.createIcons({
+          root: spanRef.current,
+          nameAttr: 'data-lucide'
+        });
+      }, [name, className]);
+
+      return <span ref={spanRef} className="inline-flex items-center justify-center shrink-0" {...props} />;
+    };
+
+    const LayoutDashboard = (p) => <LucideIcon name="layout-dashboard" {...p} />;
+    const Package = (p) => <LucideIcon name="package" {...p} />;
+    const QrCode = (p) => <LucideIcon name="qr-code" {...p} />;
+    const Users = (p) => <LucideIcon name="users" {...p} />;
+    const Settings = (p) => <LucideIcon name="settings" {...p} />;
+    const Plus = (p) => <LucideIcon name="plus" {...p} />;
+    const Copy = (p) => <LucideIcon name="copy" {...p} />;
+    const Check = (p) => <LucideIcon name="check" {...p} />;
+    const Search = (p) => <LucideIcon name="search" {...p} />;
+    const ArrowUpRight = (p) => <LucideIcon name="arrow-up-right" {...p} />;
+    const Clock = (p) => <LucideIcon name="clock" {...p} />;
+    const CheckCircle2 = (p) => <LucideIcon name="check-circle-2" {...p} />;
+    const XCircle = (p) => <LucideIcon name="x-circle" {...p} />;
+    const AlertCircle = (p) => <LucideIcon name="alert-circle" {...p} />;
+    const Terminal = (p) => <LucideIcon name="terminal" {...p} />;
+    const Trash2 = (p) => <LucideIcon name="trash-2" {...p} />;
+    const ShieldCheck = (p) => <LucideIcon name="shield-check" {...p} />;
+    const Sparkles = (p) => <LucideIcon name="sparkles" {...p} />;
+    const ChevronRight = (p) => <LucideIcon name="chevron-right" {...p} />;
+    const Eye = (p) => <LucideIcon name="eye" {...p} />;
+    const X = (p) => <LucideIcon name="x" {...p} />;
+    const Wallet = (p) => <LucideIcon name="wallet" {...p} />;
+    const GitFork = (p) => <LucideIcon name="git-fork" {...p} />;
+
+    // ========================================================================
+    // UTILITÁRIOS DE FORMATAÇÃO E GERADOR DE PAYLOAD PIX (EMV BR CODE)
+    // ========================================================================
+
+    const formatCurrency = (value) => {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL'
+      }).format(Number(value) || 0);
+    };
+
+    const formatDate = (dateStr) => {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr);
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(d);
+    };
+
+    // Função segura de cópia compatível com GitHub Pages e iFrames
+    const copyToClipboardSafe = (text) => {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => {
+          fallbackCopyText(text);
+        });
+      } else {
+        fallbackCopyText(text);
+      }
+    };
+
+    const fallbackCopyText = (text) => {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+      } catch (err) {
+        console.error('Erro ao copiar texto:', err);
+      }
+      document.body.removeChild(textArea);
+    };
+
+    // Cálculo CRC16-CCITT (0xFFFF) oficial do padrão Pix BACEN
+    function crc16CCITT(payload) {
+      let crc = 0xffff;
+      for (let i = 0; i < payload.length; i++) {
+        crc ^= payload.charCodeAt(i) << 8;
+        for (let j = 0; j < 8; j++) {
+          if ((crc & 0x8000) !== 0) {
+            crc = (crc << 1) ^ 0x1021;
+          } else {
+            crc = crc << 1;
+          }
+        }
+      }
+      return (crc & 0xffff).toString(16).toUpperCase().padStart(4, '0');
+    }
+
+    // Gera uma string EMV Pix Copia e Cola realista
+    function generatePixEMV({ amount, txid, merchantName = 'VINDI PAGAMENTOS SA', city = 'SAO PAULO' }) {
+      const formatField = (id, val) => {
+        const str = String(val);
+        const len = str.length.toString().padStart(2, '0');
+        return `${id}${len}${str}`;
+      };
+
+      const cleanAmount = Number(amount).toFixed(2);
+      const gui = formatField('00', 'br.gov.bcb.pix');
+      const url = formatField('25', `pix.vindi.com.br/qr/v2/${txid.toLowerCase()}`);
+      const merchantAccount = formatField('26', gui + url);
+
+      const payloadWithoutCRC = [
+        formatField('00', '01'),
+        formatField('01', '12'),
+        merchantAccount,
+        formatField('52', '0000'),
+        formatField('53', '986'),
+        formatField('54', cleanAmount),
+        formatField('58', 'BR'),
+        formatField('59', merchantName.substring(0, 25)),
+        formatField('60', city.substring(0, 15)),
+        formatField('62', formatField('05', txid.substring(0, 25))),
+        '6304'
+      ].join('');
+
+      return payloadWithoutCRC + crc16CCITT(payloadWithoutCRC);
+    }
+
+    // Componente visual de QR Code determinístico baseado no payload Pix
+    const PixQRCodeSVG = ({ value, size = 210 }) => {
+      const matrix = useMemo(() => {
+        const gridSize = 29;
+        const grid = Array.from({ length: gridSize }, () => Array(gridSize).fill(false));
+
+        const drawFinder = (r, c) => {
+          for (let i = -1; i <= 7; i++) {
+            for (let j = -1; j <= 7; j++) {
+              const nr = r + i;
+              const nc = c + j;
+              if (nr >= 0 && nr < gridSize && nc >= 0 && nc < gridSize) {
+                if (i === -1 || i === 7 || j === -1 || j === 7) {
+                  grid[nr][nc] = false;
+                } else if (i === 0 || i === 6 || j === 0 || j === 6 || (i >= 2 && i <= 4 && j >= 2 && j <= 4)) {
+                  grid[nr][nc] = true;
+                } else {
+                  grid[nr][nc] = false;
+                }
+              }
+            }
+          }
+        };
+
+        drawFinder(0, 0);
+        drawFinder(0, gridSize - 7);
+        drawFinder(gridSize - 7, 0);
+
+        for (let i = 8; i < gridSize - 8; i++) {
+          grid[6][i] = i % 2 === 0;
+          grid[i][6] = i % 2 === 0;
+        }
+
+        let hash = 2166136261;
+        for (let i = 0; i < value.length; i++) {
+          hash ^= value.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+
+        for (let r = 0; r < gridSize; r++) {
+          for (let c = 0; c < gridSize; c++) {
+            const inTopLeft = r < 8 && c < 8;
+            const inTopRight = r < 8 && c >= gridSize - 8;
+            const inBottomLeft = r >= gridSize - 8 && c < 8;
+            const inCenterLogo = r >= 11 && r <= 17 && c >= 11 && c <= 17;
+            if (inTopLeft || inTopRight || inBottomLeft || r === 6 || c === 6 || inCenterLogo) continue;
+
+            const charCode = value.charCodeAt((r * gridSize + c) % value.length) || 65;
+            const bit = ((hash ^ (charCode * (r + 1) * (c + 3))) >>> ((r + c) % 16)) & 1;
+            grid[r][c] = bit === 1;
+          }
+        }
+
+        return grid;
+      }, [value]);
+
+      const cellSize = size / matrix.length;
+
+      return (
+        <div className="relative inline-flex items-center justify-center p-4 bg-white rounded-2xl shadow-sm border border-slate-200">
+          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
+            <rect width={size} height={size} fill="#FFFFFF" />
+            {matrix.map((row, rIdx) =>
+              row.map((cell, cIdx) =>
+                cell ? (
+                  <rect
+                    key={`${rIdx}-${cIdx}`}
+                    x={cIdx * cellSize}
+                    y={rIdx * cellSize}
+                    width={cellSize + 0.2}
+                    height={cellSize + 0.2}
+                    rx={cellSize * 0.22}
+                    fill="#0F172A"
+                  />
+                ) : null
+              )
+            )}
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-11 h-11 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-md border-2 border-white">
+              <QrCode className="w-6 h-6" />
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ========================================================================
+    // DADOS INICIAIS (ESTRUTURA IDÊNTICA À API REST V1 DA VINDI)
+    // ========================================================================
+
+    const INITIAL_PRODUCTS = [
+      {
+        id: 401921,
+        name: 'Plano Growth SaaS (Mensal)',
+        code: 'PLAN-GROWTH-M',
+        unit: 'assinatura',
+        status: 'active',
+        description: 'Acesso completo à plataforma com suporte prioritário e API ilimitada.',
+        pricing_schema: {
+          id: 88210,
+          price: 299.90,
+          schema_type: 'flat'
+        },
+        default_splits: [
+          { recipient_id: 'rec_01', mode: 'percentage', value: 85 },
+          { recipient_id: 'rec_02', mode: 'percentage', value: 15 }
+        ],
+        created_at: '2026-10-12T14:20:00-03:00'
+      },
+      {
+        id: 401922,
+        name: 'Setup & Onboarding Especializado',
+        code: 'SETUP-PRO-01',
+        unit: 'serviço',
+        status: 'active',
+        description: 'Implantação assistida, configuração de webhooks e migração de base.',
+        pricing_schema: {
+          id: 88211,
+          price: 750.00,
+          schema_type: 'flat'
+        },
+        default_splits: [
+          { recipient_id: 'rec_01', mode: 'percentage', value: 70 },
+          { recipient_id: 'rec_03', mode: 'percentage', value: 30 }
+        ],
+        created_at: '2026-10-15T09:10:00-03:00'
+      },
+      {
+        id: 401923,
+        name: 'Pacote 10.000 Disparo Webhooks Extra',
+        code: 'ADDON-WH-10K',
+        unit: 'pacote',
+        status: 'active',
+        description: 'Pacote avulso de requisições de alta disponibilidade.',
+        pricing_schema: {
+          id: 88212,
+          price: 89.00,
+          schema_type: 'flat'
+        },
+        default_splits: [
+          { recipient_id: 'rec_01', mode: 'percentage', value: 100 }
+        ],
+        created_at: '2026-11-02T16:45:00-03:00'
+      },
+      {
+        id: 401924,
+        name: 'Consultoria Arquitetura Financeira',
+        code: 'CONS-FIN-H',
+        unit: 'hora',
+        status: 'inactive',
+        description: 'Sessão avulsa de revisão tributária e régua de cobrança.',
+        pricing_schema: {
+          id: 88213,
+          price: 420.00,
+          schema_type: 'flat'
+        },
+        default_splits: [
+          { recipient_id: 'rec_01', mode: 'percentage', value: 100 }
+        ],
+        created_at: '2026-09-20T11:00:00-03:00'
+      }
+    ];
+
+    const INITIAL_RECIPIENTS = [
+      {
+        id: 'rec_01',
+        vindi_account_id: 'ACC-VINDI-001',
+        name: 'Conta Principal (Plataforma / Marketplace)',
+        document: '45.123.890/0001-10',
+        pix_key: 'financeiro@suaplataforma.com.br',
+        role: 'Principal',
+        status: 'active'
+      },
+      {
+        id: 'rec_02',
+        vindi_account_id: 'ACC-VINDI-002',
+        name: 'Parceiro Comercial & Afiliados Ltda',
+        document: '28.901.442/0001-88',
+        pix_key: '28901442000188',
+        role: 'Seller / Parceiro',
+        status: 'active'
+      },
+      {
+        id: 'rec_03',
+        vindi_account_id: 'ACC-VINDI-003',
+        name: 'Consultoria Técnica & Implantação ME',
+        document: '19.445.710/0001-32',
+        pix_key: 'pix@consultoriatec.com.br',
+        role: 'Prestador',
+        status: 'active'
+      }
+    ];
+
+    const INITIAL_CUSTOMERS = [
+      {
+        id: 99104,
+        name: 'TechNova Soluções Digitais Ltda',
+        email: 'financeiro@technova.com.br',
+        registry_code: '34.892.110/0001-45',
+        code: 'CLI-001',
+        status: 'active'
+      },
+      {
+        id: 99105,
+        name: 'Mariana Costa Arquitetura',
+        email: 'mariana@costaarq.com.br',
+        registry_code: '389.412.898-12',
+        code: 'CLI-002',
+        status: 'active'
+      },
+      {
+        id: 99106,
+        name: 'Grupo Horizonte Logística S/A',
+        email: 'contasapagar@horizonte.log.br',
+        registry_code: '12.409.887/0001-90',
+        code: 'CLI-003',
+        status: 'active'
+      }
+    ];
+
+    const createInitialBills = () => {
+      const tx1 = 'VINDIPX20261125001';
+      const tx2 = 'VINDIPX20261125002';
+      const tx3 = 'VINDIPX20261124003';
+
+      return [
+        {
+          id: 774102,
+          code: 'BILL-774102',
+          amount: 299.90,
+          status: 'pending',
+          payment_method_code: 'pix',
+          pix_type: 'pix_avulso',
+          customer: INITIAL_CUSTOMERS[0],
+          bill_items: [
+            {
+              id: 1,
+              product_id: 401921,
+              product_name: 'Plano Growth SaaS (Mensal)',
+              quantity: 1,
+              unit_price: 299.90,
+              amount: 299.90
+            }
+          ],
+          due_at: new Date(Date.now() + 86400000).toISOString(),
+          created_at: new Date(Date.now() - 1800000).toISOString(),
+          pix_qr_code: generatePixEMV({ amount: 299.90, txid: tx1 }),
+          txid: tx1,
+          split_enabled: true,
+          split_rules: [
+            {
+              recipient_id: 'rec_01',
+              recipient_name: 'Conta Principal (Plataforma / Marketplace)',
+              mode: 'percentage',
+              value: 85,
+              calculated_amount: 254.92
+            },
+            {
+              recipient_id: 'rec_02',
+              recipient_name: 'Parceiro Comercial & Afiliados Ltda',
+              mode: 'percentage',
+              value: 15,
+              calculated_amount: 44.98
+            }
+          ]
+        },
+        {
+          id: 774101,
+          code: 'BILL-774101',
+          amount: 839.00,
+          status: 'paid',
+          payment_method_code: 'pix',
+          pix_type: 'pix_avulso',
+          customer: INITIAL_CUSTOMERS[2],
+          bill_items: [
+            {
+              id: 2,
+              product_id: 401922,
+              product_name: 'Setup & Onboarding Especializado',
+              quantity: 1,
+              unit_price: 750.00,
+              amount: 750.00
+            },
+            {
+              id: 3,
+              product_id: 401923,
+              product_name: 'Pacote 10.000 Disparo Webhooks Extra',
+              quantity: 1,
+              unit_price: 89.00,
+              amount: 89.00
+            }
+          ],
+          due_at: new Date(Date.now() + 172800000).toISOString(),
+          created_at: new Date(Date.now() - 14400000).toISOString(),
+          paid_at: new Date(Date.now() - 13800000).toISOString(),
+          pix_qr_code: generatePixEMV({ amount: 839.00, txid: tx2 }),
+          txid: tx2,
+          split_enabled: true,
+          split_rules: [
+            {
+              recipient_id: 'rec_01',
+              recipient_name: 'Conta Principal (Plataforma / Marketplace)',
+              mode: 'percentage',
+              value: 73.18,
+              calculated_amount: 614.00
+            },
+            {
+              recipient_id: 'rec_03',
+              recipient_name: 'Consultoria Técnica & Implantação ME',
+              mode: 'fixed',
+              value: 225.00,
+              calculated_amount: 225.00
+            }
+          ]
+        },
+        {
+          id: 774098,
+          code: 'BILL-774098',
+          amount: 299.90,
+          status: 'paid',
+          payment_method_code: 'pix_automatic',
+          pix_type: 'pix_automatico',
+          customer: INITIAL_CUSTOMERS[1],
+          bill_items: [
+            {
+              id: 4,
+              product_id: 401921,
+              product_name: 'Plano Growth SaaS (Mensal)',
+              quantity: 1,
+              unit_price: 299.90,
+              amount: 299.90
+            }
+          ],
+          due_at: new Date(Date.now() - 86400000).toISOString(),
+          created_at: new Date(Date.now() - 95000000).toISOString(),
+          paid_at: new Date(Date.now() - 94200000).toISOString(),
+          pix_qr_code: generatePixEMV({ amount: 299.90, txid: tx3 }),
+          txid: tx3,
+          split_enabled: false,
+          split_rules: []
+        }
+      ];
+    };
+
+    // ========================================================================
+    // COMPONENTE PRINCIPAL
+    // ========================================================================
+
+    function App() {
+      const [activeTab, setActiveTab] = useState('dashboard');
+
+      // Configuração API Vindi
+      const [apiMode, setApiMode] = useState('sandbox');
+      const [apiKey, setApiKey] = useState('');
+      const [apiEnvironment, setApiEnvironment] = useState('https://sandbox-app.vindi.com.br/api/v1');
+      const [isConfigOpen, setIsConfigOpen] = useState(false);
+
+      // Estados de Dados com Persistência Local (localStorage) para GitHub Pages
+      const [products, setProducts] = useState(() => {
+        try {
+          const saved = localStorage.getItem('vindi_gh_products');
+          return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+        } catch {
+          return INITIAL_PRODUCTS;
+        }
+      });
+
+      const [recipients, setRecipients] = useState(() => {
+        try {
+          const saved = localStorage.getItem('vindi_gh_recipients');
+          return saved ? JSON.parse(saved) : INITIAL_RECIPIENTS;
+        } catch {
+          return INITIAL_RECIPIENTS;
+        }
+      });
+
+      const [customers, setCustomers] = useState(() => {
+        try {
+          const saved = localStorage.getItem('vindi_gh_customers');
+          return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
+        } catch {
+          return INITIAL_CUSTOMERS;
+        }
+      });
+
+      const [bills, setBills] = useState(() => {
+        try {
+          const saved = localStorage.getItem('vindi_gh_bills');
+          return saved ? JSON.parse(saved) : createInitialBills();
+        } catch {
+          return createInitialBills();
+        }
+      });
+
+      useEffect(() => {
+        try { localStorage.setItem('vindi_gh_products', JSON.stringify(products)); } catch {}
+      }, [products]);
+
+      useEffect(() => {
+        try { localStorage.setItem('vindi_gh_recipients', JSON.stringify(recipients)); } catch {}
+      }, [recipients]);
+
+      useEffect(() => {
+        try { localStorage.setItem('vindi_gh_customers', JSON.stringify(customers)); } catch {}
+      }, [customers]);
+
+      useEffect(() => {
+        try { localStorage.setItem('vindi_gh_bills', JSON.stringify(bills)); } catch {}
+      }, [bills]);
+
+      // Logs de API & Webhooks
+      const [apiLogs, setApiLogs] = useState([
+        {
+          id: 'log-1',
+          timestamp: new Date(Date.now() - 13800000).toISOString(),
+          type: 'WEBHOOK',
+          method: 'POST',
+          endpoint: '/webhooks/vindi (event: bill_paid)',
+          status: 200,
+          payload: {
+            event: {
+              type: 'bill_paid',
+              created_at: new Date(Date.now() - 13800000).toISOString(),
+              data: {
+                bill: { id: 774101, amount: '839.00', status: 'paid', payment_method: 'pix' }
+              }
+            }
+          }
+        }
+      ]);
+
+      // Modais & Notificações
+      const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+      const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+      const [isRecipientModalOpen, setIsRecipientModalOpen] = useState(false);
+      const [editingRecipientId, setEditingRecipientId] = useState(null);
+      const [selectedBillForQR, setSelectedBillForQR] = useState(null);
+      const [toast, setToast] = useState(null);
+      const [copiedText, setCopiedText] = useState('');
+
+      // Busca & Filtros
+      const [productSearch, setProductSearch] = useState('');
+      const [billFilter, setBillFilter] = useState('all');
+
+      // Form Novo Produto
+      const [newProduct, setNewProduct] = useState({
+        name: '',
+        code: '',
+        unit: 'unidade',
+        price: '',
+        status: 'active',
+        description: '',
+        useDefaultSplit: false,
+        defaultSplits: [
+          { recipient_id: 'rec_01', mode: 'percentage', value: 80 },
+          { recipient_id: 'rec_02', mode: 'percentage', value: 20 }
+        ]
+      });
+
+      // Form Novo Recebedor
+      const [newRecipient, setNewRecipient] = useState({
+        name: '',
+        document: '',
+        email: '',
+        pix_key_type: 'cnpj',
+        pix_key: '',
+        bank_name: '',
+        bank_agency: '',
+        bank_account: '',
+        vindi_account_id: '',
+        role: 'Seller / Parceiro'
+      });
+
+      // Form Novo Cliente
+      const [newCustomer, setNewCustomer] = useState({
+        name: '',
+        email: '',
+        registry_code: '',
+        code: ''
+      });
+
+      // Form Nova Cobrança Pix com Split de Pagamento
+      const [pixForm, setPixForm] = useState({
+        customerId: INITIAL_CUSTOMERS[0].id,
+        pixType: 'pix_avulso',
+        dueHours: '24',
+        items: [
+          {
+            productId: INITIAL_PRODUCTS[0].id,
+            quantity: 1
+          }
+        ],
+        splitEnabled: true,
+        splits: [
+          { recipientId: 'rec_01', mode: 'percentage', value: 85 },
+          { recipientId: 'rec_02', mode: 'percentage', value: 15 }
+        ]
+      });
+
+      const [isSubmitting, setIsSubmitting] = useState(false);
+
+      const showToast = (message, type = 'success') => {
+        setToast({ message, type });
+        setTimeout(() => {
+          setToast((prev) => (prev?.message === message ? null : prev));
+        }, 4000);
+      };
+
+      const addApiLog = (type, method, endpoint, status, payload) => {
+        setApiLogs((prev) => [
+          {
+            id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            timestamp: new Date().toISOString(),
+            type,
+            method,
+            endpoint,
+            status,
+            payload
+          },
+          ...prev
+        ]);
+      };
+
+      const handleCopy = (text, label = 'Copiado!') => {
+        copyToClipboardSafe(text);
+        setCopiedText(text);
+        showToast(label, 'success');
+        setTimeout(() => setCopiedText(''), 2500);
+      };
+
+      const executeVindiRequest = async (method, path, body) => {
+        if (apiMode === 'live' && apiKey.trim()) {
+          try {
+            const encodedKey = btoa(`${apiKey.trim()}:`);
+            const response = await fetch(`${apiEnvironment}${path}`, {
+              method,
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Basic ${encodedKey}`
+              },
+              body: body ? JSON.stringify(body) : undefined
+            });
+            const data = await response.json();
+            addApiLog('API_LIVE', method, path, response.status, data);
+            if (!response.ok) {
+              throw new Error(data?.errors?.[0]?.message || `Erro HTTP ${response.status}`);
+            }
+            return { liveSuccess: true, data };
+          } catch (err) {
+            addApiLog('API_ERROR', method, path, 0, {
+              error: err.message,
+              note: 'Bloqueio de CORS no navegador ou chave inválida. Executando fallback local.'
+            });
+            showToast(`Aviso API Real: ${err.message} (registrado localmente)`, 'warning');
+            return { liveSuccess: false };
+          }
+        }
+        return { liveSuccess: false };
+      };
+
+      // ======================================================================
+      // AÇÕES: PRODUTOS
+      // ======================================================================
+
+      const handleCreateProduct = async (e) => {
+        e.preventDefault();
+        if (!newProduct.name.trim() || !newProduct.price) return;
+
+        if (newProduct.useDefaultSplit) {
+          const totalPct = newProduct.defaultSplits.reduce((acc, s) => acc + (Number(s.value) || 0), 0);
+          if (Math.abs(totalPct - 100) > 0.01) {
+            showToast('A soma do rateio padrão do produto deve ser exatamente 100%.', 'warning');
+            return;
+          }
+        }
+
+        setIsSubmitting(true);
+        const numericPrice = parseFloat(String(newProduct.price).replace(',', '.'));
+
+        const vindiPayload = {
+          name: newProduct.name.trim(),
+          code: newProduct.code.trim() || `PROD-${Math.floor(1000 + Math.random() * 9000)}`,
+          unit: newProduct.unit,
+          status: newProduct.status,
+          description: newProduct.description.trim(),
+          pricing_schema: {
+            price: numericPrice,
+            schema_type: 'flat'
+          },
+          default_splits: newProduct.useDefaultSplit
+            ? newProduct.defaultSplits.map((s) => ({
+                recipient_id: s.recipient_id,
+                mode: 'percentage',
+                value: Number(s.value) || 0
+              }))
+            : [{ recipient_id: recipients[0]?.id || 'rec_01', mode: 'percentage', value: 100 }]
+        };
+
+        await executeVindiRequest('POST', '/products', vindiPayload);
+
+        const createdProduct = {
+          id: Math.floor(402000 + Math.random() * 9000),
+          ...vindiPayload,
+          pricing_schema: {
+            id: Math.floor(88300 + Math.random() * 900),
+            price: numericPrice,
+            schema_type: 'flat'
+          },
+          created_at: new Date().toISOString()
+        };
+
+        setProducts((prev) => [createdProduct, ...prev]);
+        addApiLog('REST_V1', 'POST', '/v1/products', 201, { product: createdProduct });
+
+        setNewProduct({
+          name: '',
+          code: '',
+          unit: 'unidade',
+          price: '',
+          status: 'active',
+          description: '',
+          useDefaultSplit: false,
+          defaultSplits: [
+            { recipient_id: 'rec_01', mode: 'percentage', value: 80 },
+            { recipient_id: 'rec_02', mode: 'percentage', value: 20 }
+          ]
+        });
+        setIsSubmitting(false);
+        setIsProductModalOpen(false);
+        showToast(`Produto "${createdProduct.name}" criado com sucesso!`);
+      };
+
+      const toggleProductStatus = (productId) => {
+        setProducts((prev) =>
+          prev.map((p) => {
+            if (p.id !== productId) return p;
+            const nextStatus = p.status === 'active' ? 'inactive' : 'active';
+            addApiLog('REST_V1', 'PUT', `/v1/products/${productId}`, 200, {
+              product: { id: productId, status: nextStatus }
+            });
+            return { ...p, status: nextStatus };
+          })
+        );
+        showToast('Status do produto atualizado.');
+      };
+
+      // ======================================================================
+      // AÇÕES: RECEBEDORES (SPLIT DE PAGAMENTO)
+      // ======================================================================
+
+      const openCreateRecipientModal = () => {
+        setEditingRecipientId(null);
+        setNewRecipient({
+          name: '',
+          document: '',
+          email: '',
+          pix_key_type: 'cnpj',
+          pix_key: '',
+          bank_name: '',
+          bank_agency: '',
+          bank_account: '',
+          vindi_account_id: '',
+          role: 'Seller / Parceiro'
+        });
+        setIsRecipientModalOpen(true);
+      };
+
+      const openEditRecipientModal = (rec) => {
+        setEditingRecipientId(rec.id);
+        setNewRecipient({
+          name: rec.name || '',
+          document: rec.document || '',
+          email: rec.email || '',
+          pix_key_type: rec.pix_key_type || 'cnpj',
+          pix_key: rec.pix_key || '',
+          bank_name: rec.bank_name || '',
+          bank_agency: rec.bank_agency || '',
+          bank_account: rec.bank_account || '',
+          vindi_account_id: rec.vindi_account_id || '',
+          role: rec.role || 'Seller / Parceiro'
+        });
+        setIsRecipientModalOpen(true);
+      };
+
+      const handleCreateRecipient = async (e) => {
+        e.preventDefault();
+        if (!newRecipient.name.trim() || !newRecipient.pix_key.trim()) return;
+
+        if (editingRecipientId) {
+          setRecipients((prev) =>
+            prev.map((r) =>
+              r.id === editingRecipientId
+                ? {
+                    ...r,
+                    name: newRecipient.name.trim(),
+                    document: newRecipient.document.trim() || r.document,
+                    email: newRecipient.email.trim(),
+                    pix_key_type: newRecipient.pix_key_type,
+                    pix_key: newRecipient.pix_key.trim(),
+                    bank_name: newRecipient.bank_name.trim(),
+                    bank_agency: newRecipient.bank_agency.trim(),
+                    bank_account: newRecipient.bank_account.trim(),
+                    vindi_account_id: newRecipient.vindi_account_id.trim() || r.vindi_account_id,
+                    role: newRecipient.role
+                  }
+                : r
+            )
+          );
+          addApiLog('REST_V1', 'PUT', `/v1/split_recipients/${editingRecipientId}`, 200, {
+            recipient: { id: editingRecipientId, ...newRecipient }
+          });
+          setEditingRecipientId(null);
+          setIsRecipientModalOpen(false);
+          showToast(`Dados do recebedor "${newRecipient.name.trim()}" atualizados!`);
+          return;
+        }
+
+        const created = {
+          id: `rec_${Date.now().toString().slice(-4)}`,
+          vindi_account_id:
+            newRecipient.vindi_account_id.trim() || `ACC-VINDI-${Math.floor(100 + Math.random() * 899)}`,
+          name: newRecipient.name.trim(),
+          document: newRecipient.document.trim() || '00.000.000/0001-00',
+          email: newRecipient.email.trim(),
+          pix_key_type: newRecipient.pix_key_type,
+          pix_key: newRecipient.pix_key.trim(),
+          bank_name: newRecipient.bank_name.trim(),
+          bank_agency: newRecipient.bank_agency.trim(),
+          bank_account: newRecipient.bank_account.trim(),
+          role: newRecipient.role,
+          status: 'active'
+        };
+
+        setRecipients((prev) => [...prev, created]);
+        addApiLog('REST_V1', 'POST', '/v1/split_recipients', 201, { recipient: created });
+
+        setPixForm((prev) => ({
+          ...prev,
+          splits: prev.splitEnabled
+            ? [...prev.splits, { recipientId: created.id, mode: 'percentage', value: 0 }]
+            : prev.splits
+        }));
+
+        setNewRecipient({
+          name: '',
+          document: '',
+          email: '',
+          pix_key_type: 'cnpj',
+          pix_key: '',
+          bank_name: '',
+          bank_agency: '',
+          bank_account: '',
+          vindi_account_id: '',
+          role: 'Seller / Parceiro'
+        });
+        setIsRecipientModalOpen(false);
+        showToast(`Recebedor "${created.name}" cadastrado e pronto para receber splits!`);
+      };
+
+      const handleDeleteRecipient = (recId) => {
+        if (recId === 'rec_01') {
+          showToast('A conta principal da plataforma não pode ser removida.', 'warning');
+          return;
+        }
+        setRecipients((prev) => prev.filter((r) => r.id !== recId));
+        setPixForm((prev) => ({
+          ...prev,
+          splits: prev.splits.filter((s) => s.recipientId !== recId)
+        }));
+        addApiLog('REST_V1', 'DELETE', `/v1/split_recipients/${recId}`, 200, {
+          deleted_recipient_id: recId
+        });
+        showToast('Recebedor removido da lista.', 'warning');
+      };
+
+      // ======================================================================
+      // AÇÕES: CLIENTES
+      // ======================================================================
+
+      const handleCreateCustomer = async (e) => {
+        e.preventDefault();
+        if (!newCustomer.name.trim() || !newCustomer.email.trim()) return;
+
+        const vindiPayload = {
+          name: newCustomer.name.trim(),
+          email: newCustomer.email.trim(),
+          registry_code: newCustomer.registry_code.trim() || '000.000.000-00',
+          code: newCustomer.code.trim() || `CLI-${Math.floor(100 + Math.random() * 899)}`
+        };
+
+        await executeVindiRequest('POST', '/customers', vindiPayload);
+
+        const created = {
+          id: Math.floor(99200 + Math.random() * 800),
+          ...vindiPayload,
+          status: 'active'
+        };
+
+        setCustomers((prev) => [created, ...prev]);
+        setPixForm((prev) => ({ ...prev, customerId: created.id }));
+        addApiLog('REST_V1', 'POST', '/v1/customers', 201, { customer: created });
+
+        setNewCustomer({ name: '', email: '', registry_code: '', code: '' });
+        setIsCustomerModalOpen(false);
+        showToast(`Cliente "${created.name}" cadastrado!`);
+      };
+
+      // ======================================================================
+      // AÇÕES: COBRANÇAS PIX (BILLS) & CÁLCULO DE SPLIT
+      // ======================================================================
+
+      const pixFormTotal = useMemo(() => {
+        return pixForm.items.reduce((acc, item) => {
+          const prod = products.find((p) => p.id === Number(item.productId));
+          const price = prod ? prod.pricing_schema.price : 0;
+          return acc + price * (Number(item.quantity) || 1);
+        }, 0);
+      }, [pixForm.items, products]);
+
+      const computedSplitSummary = useMemo(() => {
+        if (!pixForm.splitEnabled || pixFormTotal <= 0) {
+          return {
+            rows: [],
+            totalAllocated: pixFormTotal,
+            remaining: 0,
+            isValid: true
+          };
+        }
+
+        let totalAllocated = 0;
+        const rows = pixForm.splits.map((rule) => {
+          const rec = recipients.find((r) => r.id === rule.recipientId) || recipients[0];
+          const numericVal = Math.max(0, Number(rule.value) || 0);
+          const calculatedAmount =
+            rule.mode === 'percentage'
+              ? Number(((pixFormTotal * numericVal) / 100).toFixed(2))
+              : Number(numericVal.toFixed(2));
+
+          totalAllocated = Number((totalAllocated + calculatedAmount).toFixed(2));
+          const effectivePct =
+            pixFormTotal > 0 ? Number(((calculatedAmount / pixFormTotal) * 100).toFixed(2)) : 0;
+
+          return {
+            ...rule,
+            recipientName: rec ? rec.name : 'Recebedor',
+            recipientKey: rec ? rec.pix_key : '',
+            vindiAccountId: rec ? rec.vindi_account_id : '',
+            calculatedAmount,
+            effectivePct
+          };
+        });
+
+        const remaining = Number((pixFormTotal - totalAllocated).toFixed(2));
+        const isValid = Math.abs(remaining) <= 0.05 && rows.length > 0;
+
+        return {
+          rows,
+          totalAllocated,
+          remaining,
+          isValid
+        };
+      }, [pixForm.splitEnabled, pixForm.splits, pixFormTotal, recipients]);
+
+      const handleApplyProductSplitRules = () => {
+        if (pixFormTotal <= 0) return;
+        const accumulator = {};
+
+        pixForm.items.forEach((item) => {
+          const prod = products.find((p) => p.id === Number(item.productId));
+          if (!prod) return;
+          const itemTotal = prod.pricing_schema.price * (Number(item.quantity) || 1);
+          const prodSplits =
+            prod.default_splits && prod.default_splits.length > 0
+              ? prod.default_splits
+              : [{ recipient_id: recipients[0]?.id || 'rec_01', mode: 'percentage', value: 100 }];
+
+          prodSplits.forEach((sp) => {
+            const share = (itemTotal * (Number(sp.value) || 0)) / 100;
+            accumulator[sp.recipient_id] = (accumulator[sp.recipient_id] || 0) + share;
+          });
+        });
+
+        const entries = Object.entries(accumulator);
+        if (entries.length === 0) return;
+
+        let sumPct = 0;
+        const nextSplits = entries.map(([recipientId, amount], idx) => {
+          let pct = Number(((amount / pixFormTotal) * 100).toFixed(2));
+          if (idx === entries.length - 1) {
+            pct = Number((100 - sumPct).toFixed(2));
+          } else {
+            sumPct += pct;
+          }
+          return {
+            recipientId,
+            mode: 'percentage',
+            value: pct
+          };
+        });
+
+        setPixForm((prev) => ({
+          ...prev,
+          splitEnabled: true,
+          splits: nextSplits
+        }));
+        showToast('Divisão calculada automaticamente conforme os produtos da fatura!');
+      };
+
+      const handleAddSplitRule = () => {
+        const unused = recipients.find((r) => !pixForm.splits.some((s) => s.recipientId === r.id));
+        const targetRec = unused || recipients[0];
+        if (!targetRec) return;
+
+        const remPct =
+          pixFormTotal > 0
+            ? Math.max(0, Number(((computedSplitSummary.remaining / pixFormTotal) * 100).toFixed(2)))
+            : 0;
+
+        setPixForm((prev) => ({
+          ...prev,
+          splits: [
+            ...prev.splits,
+            {
+              recipientId: targetRec.id,
+              mode: 'percentage',
+              value: remPct
+            }
+          ]
+        }));
+      };
+
+      const handleRemoveSplitRule = (idx) => {
+        if (pixForm.splits.length <= 1) return;
+        setPixForm((prev) => ({
+          ...prev,
+          splits: prev.splits.filter((_, i) => i !== idx)
+        }));
+      };
+
+      const handleUpdateSplitRule = (idx, field, value) => {
+        setPixForm((prev) => ({
+          ...prev,
+          splits: prev.splits.map((s, i) => (i === idx ? { ...s, [field]: value } : s))
+        }));
+      };
+
+      const handleAddPixItem = () => {
+        const activeProds = products.filter((p) => p.status === 'active');
+        const defaultProd = activeProds[0] || products[0];
+        if (!defaultProd) return;
+        setPixForm((prev) => ({
+          ...prev,
+          items: [...prev.items, { productId: defaultProd.id, quantity: 1 }]
+        }));
+      };
+
+      const handleRemovePixItem = (idx) => {
+        if (pixForm.items.length <= 1) return;
+        setPixForm((prev) => ({
+          ...prev,
+          items: prev.items.filter((_, i) => i !== idx)
+        }));
+      };
+
+      const handleUpdatePixItem = (idx, field, value) => {
+        setPixForm((prev) => ({
+          ...prev,
+          items: prev.items.map((item, i) => (i === idx ? { ...item, [field]: value } : item))
+        }));
+      };
+
+      const handleCreatePixCharge = async (e) => {
+        e.preventDefault();
+        if (pixFormTotal <= 0) {
+          showToast('Adicione pelo menos um produto válido à cobrança.', 'warning');
+          return;
+        }
+
+        if (pixForm.splitEnabled && !computedSplitSummary.isValid) {
+          showToast(
+            `A divisão do Split precisa fechar 100% do valor (${formatCurrency(pixFormTotal)}). Diferença atual: ${formatCurrency(computedSplitSummary.remaining)}.`,
+            'warning'
+          );
+          return;
+        }
+
+        setIsSubmitting(true);
+        const customer = customers.find((c) => c.id === Number(pixForm.customerId)) || customers[0];
+
+        const resolvedItems = pixForm.items.map((item, index) => {
+          const prod = products.find((p) => p.id === Number(item.productId));
+          const qty = Math.max(1, Number(item.quantity) || 1);
+          const unitPrice = prod ? prod.pricing_schema.price : 0;
+          return {
+            id: Date.now() + index,
+            product_id: prod.id,
+            product_name: prod.name,
+            quantity: qty,
+            unit_price: unitPrice,
+            amount: unitPrice * qty
+          };
+        });
+
+        const billId = Math.floor(774200 + Math.random() * 8000);
+        const txid = `VINDIPX${Date.now().toString().slice(-10)}`;
+        const paymentMethodCode = pixForm.pixType === 'pix_automatico' ? 'pix_automatic' : 'pix';
+        const dueAt = new Date(Date.now() + Number(pixForm.dueHours) * 3600000).toISOString();
+
+        const resolvedSplits = pixForm.splitEnabled
+          ? computedSplitSummary.rows.map((r) => ({
+              recipient_id: r.recipientId,
+              recipient_name: r.recipientName,
+              vindi_account_id: r.vindiAccountId,
+              mode: r.mode,
+              value: Number(r.value),
+              calculated_amount: r.calculatedAmount
+            }))
+          : [];
+
+        const vindiBillPayload = {
+          customer_id: customer.id,
+          payment_method_code: paymentMethodCode,
+          due_at: dueAt,
+          bill_items: resolvedItems.map((it) => ({
+            product_id: it.product_id,
+            amount: it.amount,
+            quantity: it.quantity
+          })),
+          ...(pixForm.splitEnabled && {
+            split_rules: resolvedSplits.map((sp) => ({
+              recipient_account_id: sp.vindi_account_id,
+              amount: sp.calculated_amount,
+              percentage:
+                pixFormTotal > 0 ? Number(((sp.calculated_amount / pixFormTotal) * 100).toFixed(2)) : 0
+            }))
+          })
+        };
+
+        await executeVindiRequest('POST', '/bills', vindiBillPayload);
+
+        const pixEmv = generatePixEMV({
+          amount: pixFormTotal,
+          txid
+        });
+
+        const newBill = {
+          id: billId,
+          code: `BILL-${billId}`,
+          amount: pixFormTotal,
+          status: 'pending',
+          payment_method_code: paymentMethodCode,
+          pix_type: pixForm.pixType,
+          customer,
+          bill_items: resolvedItems,
+          due_at: dueAt,
+          created_at: new Date().toISOString(),
+          pix_qr_code: pixEmv,
+          txid,
+          split_enabled: pixForm.splitEnabled,
+          split_rules: resolvedSplits
+        };
+
+        setBills((prev) => [newBill, ...prev]);
+        addApiLog('REST_V1', 'POST', '/v1/bills', 201, {
+          bill: {
+            id: newBill.id,
+            status: 'pending',
+            amount: newBill.amount.toFixed(2),
+            payment_method: { code: paymentMethodCode },
+            split_rules: resolvedSplits,
+            charges: [
+              {
+                status: 'pending',
+                last_transaction: {
+                  gateway_response_fields: {
+                    qrcode_original_path: `https://pix.vindi.com.br/qr/${txid}`,
+                    emv_payload: pixEmv
+                  }
+                }
+              }
+            ]
+          }
+        });
+
+        setIsSubmitting(false);
+        setSelectedBillForQR(newBill);
+        showToast(
+          pixForm.splitEnabled
+            ? `Cobrança Pix gerada com Split entre ${resolvedSplits.length} recebedor(es)!`
+            : 'Cobrança Pix gerada! QR Code pronto para pagamento.'
+        );
+      };
+
+      const handleSimulatePixPayment = (billId) => {
+        const paidAt = new Date().toISOString();
+        let updatedBill = null;
+
+        setBills((prev) =>
+          prev.map((b) => {
+            if (b.id !== billId) return b;
+            updatedBill = { ...b, status: 'paid', paid_at: paidAt };
+            return updatedBill;
+          })
+        );
+
+        if (selectedBillForQR && selectedBillForQR.id === billId) {
+          setSelectedBillForQR((prev) => ({ ...prev, status: 'paid', paid_at: paidAt }));
+        }
+
+        if (updatedBill) {
+          addApiLog('WEBHOOK', 'POST', '/webhooks/vindi (event: bill_paid)', 200, {
+            event: {
+              type: 'bill_paid',
+              created_at: paidAt,
+              data: {
+                bill: {
+                  id: updatedBill.id,
+                  code: updatedBill.code,
+                  amount: updatedBill.amount.toFixed(2),
+                  status: 'paid',
+                  payment_method_code: updatedBill.payment_method_code,
+                  split_settlement: updatedBill.split_enabled ? updatedBill.split_rules : 'single_account',
+                  customer: { id: updatedBill.customer.id, name: updatedBill.customer.name }
+                }
+              }
+            }
+          });
+          showToast(`Pagamento Pix confirmado! Fatura #${billId} liquidada${updatedBill.split_enabled ? ' e rateada via Split' : ''}.`);
+        }
+      };
+
+      const handleCancelBill = (billId) => {
+        setBills((prev) =>
+          prev.map((b) => (b.id === billId ? { ...b, status: 'canceled' } : b))
+        );
+        if (selectedBillForQR && selectedBillForQR.id === billId) {
+          setSelectedBillForQR((prev) => ({ ...prev, status: 'canceled' }));
+        }
+        addApiLog('REST_V1', 'DELETE', `/v1/bills/${billId}`, 200, {
+          bill: { id: billId, status: 'canceled' }
+        });
+        showToast(`Fatura #${billId} cancelada.`, 'warning');
+      };
+
+      const handleResetDemoData = () => {
+        localStorage.removeItem('vindi_gh_products');
+        localStorage.removeItem('vindi_gh_recipients');
+        localStorage.removeItem('vindi_gh_customers');
+        localStorage.removeItem('vindi_gh_bills');
+        setProducts(INITIAL_PRODUCTS);
+        setRecipients(INITIAL_RECIPIENTS);
+        setCustomers(INITIAL_CUSTOMERS);
+        setBills(createInitialBills());
+        showToast('Base de demonstração restaurada para os dados originais!');
+      };
+
+      // ======================================================================
+      // MÉTRICAS DO DASHBOARD
+      // ======================================================================
+
+      const metrics = useMemo(() => {
+        const paidBills = bills.filter((b) => b.status === 'paid');
+        const pendingBills = bills.filter((b) => b.status === 'pending');
+        const validBills = bills.filter((b) => b.status !== 'canceled');
+
+        const totalPaid = paidBills.reduce((sum, b) => sum + b.amount, 0);
+        const totalPending = pendingBills.reduce((sum, b) => sum + b.amount, 0);
+        const conversionRate =
+          validBills.length > 0 ? Math.round((paidBills.length / validBills.length) * 100) : 0;
+        const activeProductsCount = products.filter((p) => p.status === 'active').length;
+
+        return {
+          totalPaid,
+          paidCount: paidBills.length,
+          totalPending,
+          pendingCount: pendingBills.length,
+          conversionRate,
+          activeProductsCount,
+          totalProductsCount: products.length
+        };
+      }, [bills, products]);
+
+      const recipientBalances = useMemo(() => {
+        const map = {};
+        recipients.forEach((r) => {
+          map[r.id] = { paid: 0, pending: 0, count: 0 };
+        });
+
+        bills.forEach((b) => {
+          if (b.status === 'canceled') return;
+          if (b.split_enabled && b.split_rules && b.split_rules.length > 0) {
+            b.split_rules.forEach((rule) => {
+              if (!map[rule.recipient_id]) {
+                map[rule.recipient_id] = { paid: 0, pending: 0, count: 0 };
+              }
+              if (b.status === 'paid') {
+                map[rule.recipient_id].paid += rule.calculated_amount;
+              } else if (b.status === 'pending') {
+                map[rule.recipient_id].pending += rule.calculated_amount;
+              }
+              map[rule.recipient_id].count += 1;
+            });
+          } else {
+            const mainId = recipients[0]?.id || 'rec_01';
+            if (!map[mainId]) map[mainId] = { paid: 0, pending: 0, count: 0 };
+            if (b.status === 'paid') map[mainId].paid += b.amount;
+            if (b.status === 'pending') map[mainId].pending += b.amount;
+            map[mainId].count += 1;
+          }
+        });
+
+        return map;
+      }, [bills, recipients]);
+
+      const filteredProducts = useMemo(() => {
+        return products.filter(
+          (p) =>
+            p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
+            p.code.toLowerCase().includes(productSearch.toLowerCase())
+        );
+      }, [products, productSearch]);
+
+      const filteredBills = useMemo(() => {
+        if (billFilter === 'all') return bills;
+        return bills.filter((b) => b.status === billFilter);
+      }, [bills, billFilter]);
+
+      const renderStatusBadge = (status) => {
+        switch (status) {
+          case 'paid':
+            return (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                Paga (Pix Liquidado)
+              </span>
+            );
+          case 'pending':
+            return (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                Aguardando Pix
+              </span>
+            );
+          case 'canceled':
+            return (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                <XCircle className="w-3.5 h-3.5 text-slate-500" />
+                Cancelada
+              </span>
+            );
+          default:
+            return null;
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col lg:flex-row">
+          {/* NOTIFICAÇÃO FLUTUANTE (TOAST) */}
+          {toast && (
+            <div className="fixed bottom-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border bg-slate-900 text-white border-slate-700 animate-fade-in max-w-md">
+              {toast.type === 'warning' ? (
+                <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+              )}
+              <span className="text-sm font-medium">{toast.message}</span>
+            </div>
+          )}
+
+          {/* SIDEBAR DE NAVEGAÇÃO */}
+          <aside className="w-full lg:w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 border-b lg:border-b-0 lg:border-r border-slate-800">
+            <div className="p-5 flex items-center justify-between lg:justify-start gap-3 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center text-slate-950 font-black text-xl shadow-md">
+                  V
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-white font-bold text-lg tracking-tight">Vindi</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                      Pix Hub
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">Recorrência & Pagamentos</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsConfigOpen(true)}
+                className="lg:hidden p-2 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700"
+                title="Configurações da API"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
+            </div>
+
+            <nav className="p-3 flex lg:flex-col gap-1.5 overflow-x-auto">
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'dashboard'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4 shrink-0" />
+                Visão Geral
+              </button>
+
+              <button
+                onClick={() => setActiveTab('pix')}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'pix'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  Cobranças Pix
+                </span>
+                {metrics.pendingCount > 0 && (
+                  <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-300 font-semibold">
+                    {metrics.pendingCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('products')}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'products'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <Package className="w-4 h-4 shrink-0" />
+                  Produtos
+                </span>
+                <span className="text-xs text-slate-400">{products.length}</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('recipients')}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'recipients'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <GitFork className="w-4 h-4 shrink-0" />
+                  Split & Recebedores
+                </span>
+                <span className="text-xs text-slate-400">{recipients.length}</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('customers')}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'customers'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <Users className="w-4 h-4 shrink-0" />
+                  Clientes
+                </span>
+                <span className="text-xs text-slate-400">{customers.length}</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('api_logs')}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  activeTab === 'api_logs'
+                    ? 'bg-teal-600 text-white shadow-sm'
+                    : 'hover:bg-slate-800/80 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <Terminal className="w-4 h-4 shrink-0" />
+                  API & Webhooks
+                </span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                  {apiLogs.length}
+                </span>
+              </button>
+            </nav>
+
+            {/* Status de Conexão API Vindi */}
+            <div className="mt-auto p-4 hidden lg:block border-t border-slate-800 space-y-2.5">
+              <div className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700/80">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        apiMode === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-teal-400'
+                      }`}
+                    />
+                    {apiMode === 'live' ? 'API Vindi Conectada' : 'Sandbox Interativo'}
+                  </span>
+                  <button
+                    onClick={() => setIsConfigOpen(true)}
+                    className="text-xs text-teal-400 hover:text-teal-300 font-medium"
+                  >
+                    Configurar
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  {apiMode === 'live'
+                    ? 'Enviando requisições REST v1 com Basic Auth.'
+                    : 'Dados salvos localmente no navegador (GitHub Pages Ready).'}
+                </p>
+              </div>
+            </div>
+          </aside>
+
+          {/* ÁREA DE CONTEÚDO PRINCIPAL */}
+          <main className="flex-1 flex flex-col min-w-0">
+            {/* HEADER SUPERIOR */}
+            <header className="bg-white border-b border-slate-200 px-6 py-4 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20">
+              <div>
+                <h1 className="text-xl font-bold text-slate-900">
+                  {activeTab === 'dashboard' && 'Visão Geral de Recebimentos'}
+                  {activeTab === 'pix' && 'Gerador & Gestão de Cobranças Pix'}
+                  {activeTab === 'products' && 'Catálogo de Produtos Vindi'}
+                  {activeTab === 'recipients' && 'Split de Pagamentos & Recebedores'}
+                  {activeTab === 'customers' && 'Base de Clientes'}
+                  {activeTab === 'api_logs' && 'Console API REST v1 & Webhooks'}
+                </h1>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Plataforma Vindi • Pagamentos Instantâneos, Pix e Split Multi-Recebedores
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={() => setIsConfigOpen(true)}
+                  className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition"
+                >
+                  <ShieldCheck className="w-4 h-4 text-teal-600" />
+                  {apiMode === 'live' ? 'Modo API Real' : 'Chave API / Sandbox'}
+                </button>
+
+                <button
+                  onClick={() => setIsProductModalOpen(true)}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition"
+                >
+                  <Plus className="w-4 h-4 text-slate-600" />
+                  Novo Produto
+                </button>
+
+                <button
+                  onClick={openCreateRecipientModal}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 transition"
+                >
+                  <GitFork className="w-4 h-4 text-indigo-600" />
+                  Novo Recebedor
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('pix')}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700 shadow-sm transition"
+                >
+                  <QrCode className="w-4 h-4" />
+                  Nova Cobrança Pix
+                </button>
+              </div>
+            </header>
+
+            {/* CORPO DA PÁGINA */}
+            <div className="p-6 max-w-7xl w-full mx-auto space-y-6">
+              {/* ============================================================
+                  ABA 1: VISÃO GERAL (DASHBOARD)
+              ============================================================ */}
+              {activeTab === 'dashboard' && (
+                <>
+                  {/* CARDS DE KPI */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Receita Pix Liquidada
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                          <Wallet className="w-5 h-5" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-bold text-slate-900">
+                        {formatCurrency(metrics.totalPaid)}
+                      </div>
+                      <p className="text-xs text-emerald-600 font-medium mt-1.5 flex items-center gap-1">
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                        {metrics.paidCount} cobrança(s) paga(s) via Pix
+                      </p>
+                    </div>
+
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Aguardando Pagamento
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                          <Clock className="w-5 h-5" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-bold text-slate-900">
+                        {formatCurrency(metrics.totalPending)}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1.5">
+                        {metrics.pendingCount} QR Code(s) ativo(s) em aberto
+                      </p>
+                    </div>
+
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Conversão Pix
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+                          <Sparkles className="w-5 h-5" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-bold text-slate-900">{metrics.conversionRate}%</div>
+                      <p className="text-xs text-slate-500 mt-1.5">
+                        Liquidação instantânea D+0 na conta Vindi
+                      </p>
+                    </div>
+
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          Produtos Ativos
+                        </span>
+                        <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                          <Package className="w-5 h-5" />
+                        </div>
+                      </div>
+                      <div className="text-2xl font-bold text-slate-900">
+                        {metrics.activeProductsCount}{' '}
+                        <span className="text-sm font-normal text-slate-400">
+                          / {metrics.totalProductsCount}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setIsProductModalOpen(true)}
+                        className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold mt-1.5 inline-flex items-center gap-1"
+                      >
+                        + Cadastrar novo item
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* ÚLTIMAS COBRANÇAS PIX */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h2 className="text-base font-bold text-slate-900">
+                          Últimas Faturas & Cobranças Pix
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          Clique em "QR Code" para visualizar o Pix Copia e Cola ou simular a baixa via Webhook.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('pix')}
+                        className="text-xs font-semibold text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                      >
+                        Emitir nova cobrança
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                            <th className="py-3.5 px-5">Fatura / TxID</th>
+                            <th className="py-3.5 px-5">Cliente</th>
+                            <th className="py-3.5 px-5">Modalidade</th>
+                            <th className="py-3.5 px-5">Valor</th>
+                            <th className="py-3.5 px-5">Status</th>
+                            <th className="py-3.5 px-5 text-right">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-sm">
+                          {bills.map((bill) => (
+                            <tr key={bill.id} className="hover:bg-slate-50/70 transition">
+                              <td className="py-3.5 px-5">
+                                <div className="font-semibold text-slate-900">#{bill.id}</div>
+                                <div className="text-[11px] font-mono text-slate-400">{bill.txid}</div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="font-medium text-slate-800">{bill.customer.name}</div>
+                                <div className="text-xs text-slate-500">
+                                  {bill.bill_items.map((i) => `${i.quantity}x ${i.product_name}`).join(', ')}
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-5">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-teal-50 text-teal-700">
+                                    <QrCode className="w-3.5 h-3.5" />
+                                    {bill.pix_type === 'pix_automatico' ? 'Pix Automático' : 'Pix Avulso'}
+                                  </span>
+                                  {bill.split_enabled && bill.split_rules?.length > 0 && (
+                                    <span
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/70"
+                                      title={bill.split_rules
+                                        .map((r) => `${r.recipient_name}: ${formatCurrency(r.calculated_amount)}`)
+                                        .join(' | ')}
+                                    >
+                                      <GitFork className="w-3 h-3" />
+                                      Split ({bill.split_rules.length})
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-5 font-bold text-slate-900">
+                                {formatCurrency(bill.amount)}
+                              </td>
+                              <td className="py-3.5 px-5">{renderStatusBadge(bill.status)}</td>
+                              <td className="py-3.5 px-5 text-right">
+                                <div className="inline-flex items-center gap-2">
+                                  <button
+                                    onClick={() => setSelectedBillForQR(bill)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    QR Code
+                                  </button>
+                                  {bill.status === 'pending' && (
+                                    <button
+                                      onClick={() => handleSimulatePixPayment(bill.id)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+                                      title="Simular recebimento do Webhook bill_paid"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                      Baixar Pix
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ============================================================
+                  ABA 2: GERADOR DE COBRANÇAS PIX & LISTA DE FATURAS
+              ============================================================ */}
+              {activeTab === 'pix' && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* FORMULÁRIO DE EMISSÃO PIX */}
+                  <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 h-fit">
+                    <div className="flex items-center gap-2.5 mb-5">
+                      <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+                        <QrCode className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold text-slate-900">Emitir Cobrança Pix</h2>
+                        <p className="text-xs text-slate-500">POST /api/v1/bills (payment_method: pix)</p>
+                      </div>
+                    </div>
+
+                    <form onSubmit={handleCreatePixCharge} className="space-y-4">
+                      {/* Seleção de Cliente */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Cliente Pagador</label>
+                          <button
+                            type="button"
+                            onClick={() => setIsCustomerModalOpen(true)}
+                            className="text-xs font-semibold text-teal-600 hover:text-teal-700"
+                          >
+                            + Novo cliente
+                          </button>
+                        </div>
+                        <select
+                          value={pixForm.customerId}
+                          onChange={(e) => setPixForm({ ...pixForm, customerId: Number(e.target.value) })}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        >
+                          {customers.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} ({c.registry_code})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Modalidade Pix Vindi */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                          Modalidade Pix Vindi
+                        </label>
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setPixForm({ ...pixForm, pixType: 'pix_avulso' })}
+                            className={`p-3 rounded-xl border text-left transition ${
+                              pixForm.pixType === 'pix_avulso'
+                                ? 'border-teal-600 bg-teal-50/70 text-teal-900'
+                                : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">Pix Avulso</div>
+                            <div className="text-[11px] opacity-80 mt-0.5">QR Code Dinâmico único</div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setPixForm({ ...pixForm, pixType: 'pix_automatico' })}
+                            className={`p-3 rounded-xl border text-left transition ${
+                              pixForm.pixType === 'pix_automatico'
+                                ? 'border-teal-600 bg-teal-50/70 text-teal-900'
+                                : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">Pix Automático</div>
+                            <div className="text-[11px] opacity-80 mt-0.5">Débito recorrente BACEN</div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Itens / Produtos da Cobrança */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-700">
+                            Produtos da Fatura
+                          </label>
+                          <button
+                            type="button"
+                            onClick={handleAddPixItem}
+                            className="text-xs font-semibold text-teal-600 hover:text-teal-700"
+                          >
+                            + Adicionar item
+                          </button>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          {pixForm.items.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <select
+                                value={item.productId}
+                                onChange={(e) =>
+                                  handleUpdatePixItem(idx, 'productId', Number(e.target.value))
+                                }
+                                className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                              >
+                                {products.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name} — {formatCurrency(p.pricing_schema.price)}
+                                  </option>
+                                ))}
+                              </select>
+
+                              <input
+                                type="number"
+                                min="1"
+                                max="999"
+                                value={item.quantity}
+                                onChange={(e) => handleUpdatePixItem(idx, 'quantity', e.target.value)}
+                                className="w-16 rounded-xl border border-slate-300 px-2.5 py-2 text-xs text-center font-semibold"
+                                title="Quantidade"
+                              />
+
+                              {pixForm.items.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemovePixItem(idx)}
+                                  className="p-2 text-slate-400 hover:text-rose-600"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Expiração */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                          Expiração do QR Code
+                        </label>
+                        <select
+                          value={pixForm.dueHours}
+                          onChange={(e) => setPixForm({ ...pixForm, dueHours: e.target.value })}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900"
+                        >
+                          <option value="1">1 hora (Checkout expresso)</option>
+                          <option value="24">24 horas (Padrão Vindi)</option>
+                          <option value="72">3 dias</option>
+                          <option value="168">7 dias</option>
+                        </select>
+                      </div>
+
+                      {/* SEÇÃO: SPLIT DE PAGAMENTOS */}
+                      <div className="p-4 rounded-2xl border border-indigo-200/80 bg-indigo-50/40 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center">
+                              <GitFork className="w-3.5 h-3.5" />
+                            </div>
+                            <div>
+                              <span className="text-xs font-bold text-slate-900 block">
+                                Split de Pagamentos
+                              </span>
+                              <span className="text-[11px] text-slate-500">
+                                Dividir valor entre recebedores
+                              </span>
+                            </div>
+                          </div>
+
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={pixForm.splitEnabled}
+                              onChange={(e) =>
+                                setPixForm({ ...pixForm, splitEnabled: e.target.checked })
+                              }
+                              className="sr-only peer"
+                            />
+                            <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                          </label>
+                        </div>
+
+                        {pixForm.splitEnabled && (
+                          <div className="space-y-3 pt-1">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={handleApplyProductSplitRules}
+                                className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-800 bg-white border border-indigo-200 px-2.5 py-1 rounded-lg transition"
+                              >
+                                Importar regra dos produtos
+                              </button>
+                              <div className="flex items-center gap-2.5">
+                                <button
+                                  type="button"
+                                  onClick={openCreateRecipientModal}
+                                  className="text-[11px] font-semibold text-indigo-700 hover:underline"
+                                >
+                                  + Cadastrar recebedor
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleAddSplitRule}
+                                  className="text-[11px] font-semibold text-teal-700 hover:text-teal-800"
+                                >
+                                  + Adicionar linha
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              {pixForm.splits.map((rule, idx) => {
+                                const computedRow = computedSplitSummary.rows[idx];
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="p-2.5 rounded-xl bg-white border border-slate-200 space-y-2"
+                                  >
+                                    <div className="flex items-center gap-1.5">
+                                      <select
+                                        value={rule.recipientId}
+                                        onChange={(e) =>
+                                          handleUpdateSplitRule(idx, 'recipientId', e.target.value)
+                                        }
+                                        className="flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                      >
+                                        {recipients.map((rec) => (
+                                          <option key={rec.id} value={rec.id}>
+                                            {rec.name}
+                                          </option>
+                                        ))}
+                                      </select>
+
+                                      {pixForm.splits.length > 1 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveSplitRule(idx)}
+                                          className="p-1 text-slate-400 hover:text-rose-600"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden bg-slate-50">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUpdateSplitRule(idx, 'mode', 'percentage')}
+                                          className={`px-2 py-1 text-[11px] font-bold transition ${
+                                            rule.mode === 'percentage'
+                                              ? 'bg-indigo-600 text-white'
+                                              : 'text-slate-600'
+                                          }`}
+                                          title="Divisão por Porcentagem (%)"
+                                        >
+                                          %
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUpdateSplitRule(idx, 'mode', 'fixed')}
+                                          className={`px-2 py-1 text-[11px] font-bold transition ${
+                                            rule.mode === 'fixed'
+                                              ? 'bg-indigo-600 text-white'
+                                              : 'text-slate-600'
+                                          }`}
+                                          title="Valor Fixo em Reais (R$)"
+                                        >
+                                          R$
+                                        </button>
+                                      </div>
+
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={rule.value}
+                                        onChange={(e) =>
+                                          handleUpdateSplitRule(idx, 'value', e.target.value)
+                                        }
+                                        className="w-24 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-bold text-right"
+                                      />
+
+                                      <div className="text-right min-w-[82px]">
+                                        <span className="text-xs font-bold text-emerald-700 block">
+                                          {formatCurrency(computedRow?.calculatedAmount || 0)}
+                                        </span>
+                                        <span className="text-[10px] text-slate-400">
+                                          ({computedRow?.effectivePct || 0}%)
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {/* Barra de Validação do Split */}
+                            <div
+                              className={`p-2.5 rounded-xl text-xs flex items-center justify-between border ${
+                                computedSplitSummary.isValid
+                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                  : 'bg-amber-50 border-amber-200 text-amber-800'
+                              }`}
+                            >
+                              <span className="font-semibold">
+                                {computedSplitSummary.isValid
+                                  ? 'Rateio 100% fechado'
+                                  : `Falta alocar: ${formatCurrency(computedSplitSummary.remaining)}`}
+                              </span>
+                              <span className="font-mono font-bold">
+                                {formatCurrency(computedSplitSummary.totalAllocated)} /{' '}
+                                {formatCurrency(pixFormTotal)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Resumo Total */}
+                      <div className="p-4 rounded-xl bg-slate-900 text-white flex items-center justify-between">
+                        <div>
+                          <span className="text-xs text-slate-400 block">Total da Cobrança Pix</span>
+                          <span className="text-xl font-bold text-teal-400">
+                            {formatCurrency(pixFormTotal)}
+                          </span>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={isSubmitting}
+                          className="px-5 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs shadow-sm transition flex items-center gap-2 disabled:opacity-50"
+                        >
+                          <QrCode className="w-4 h-4" />
+                          Gerar QR Code Pix
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+
+                  {/* LISTAGEM COMPLETA DE COBRANÇAS */}
+                  <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                    <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                      <h2 className="text-base font-bold text-slate-900">
+                        Histórico de Cobranças ({filteredBills.length})
+                      </h2>
+                      <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                        {[
+                          { id: 'all', label: 'Todas' },
+                          { id: 'pending', label: 'Pendentes' },
+                          { id: 'paid', label: 'Pagas' },
+                          { id: 'canceled', label: 'Canceladas' }
+                        ].map((tab) => (
+                          <button
+                            key={tab.id}
+                            onClick={() => setBillFilter(tab.id)}
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                              billFilter === tab.id
+                                ? 'bg-white text-slate-900 shadow-sm'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 overflow-y-auto max-h-[640px]">
+                      {filteredBills.length === 0 ? (
+                        <div className="p-10 text-center text-sm text-slate-500">
+                          Nenhuma cobrança encontrada neste filtro.
+                        </div>
+                      ) : (
+                        filteredBills.map((bill) => (
+                          <div
+                            key={bill.id}
+                            className="p-5 hover:bg-slate-50/70 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                <span className="font-bold text-slate-900">Fatura #{bill.id}</span>
+                                {renderStatusBadge(bill.status)}
+                                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                                  {bill.pix_type === 'pix_automatico' ? 'Pix Automático' : 'Pix Avulso'}
+                                </span>
+                                {bill.split_enabled && bill.split_rules?.length > 0 && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    <GitFork className="w-3 h-3" />
+                                    Split ({bill.split_rules.length} recebedores)
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-sm font-medium text-slate-800">
+                                {bill.customer.name}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                Itens: {bill.bill_items.map((i) => `${i.quantity}x ${i.product_name}`).join(' + ')}
+                              </div>
+                              {bill.split_enabled && bill.split_rules?.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 pt-1">
+                                  {bill.split_rules.map((sp, i) => (
+                                    <span
+                                      key={i}
+                                      className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200/80"
+                                    >
+                                      {sp.recipient_name.split(' ')[0]}:{' '}
+                                      <strong>{formatCurrency(sp.calculated_amount)}</strong>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="text-[11px] text-slate-400">
+                                Criada em {formatDate(bill.created_at)} • Vence em {formatDate(bill.due_at)}
+                              </div>
+                            </div>
+
+                            <div className="flex sm:flex-col items-end justify-between gap-2 shrink-0">
+                              <div className="text-lg font-extrabold text-slate-900">
+                                {formatCurrency(bill.amount)}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setSelectedBillForQR(bill)}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition inline-flex items-center gap-1.5"
+                                >
+                                  <QrCode className="w-3.5 h-3.5" />
+                                  Abrir Pix
+                                </button>
+                                {bill.status === 'pending' && (
+                                  <button
+                                    onClick={() => handleSimulatePixPayment(bill.id)}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+                                  >
+                                    Simular Pago
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================
+                  ABA 3: CATÁLOGO DE PRODUTOS VINDI
+              ============================================================ */}
+              {activeTab === 'products' && (
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
+                    <div className="relative w-full sm:w-80">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Buscar por nome ou código SKU..."
+                        value={productSearch}
+                        onChange={(e) => setProductSearch(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => setIsProductModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700 shadow-sm transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Cadastrar Produto Vindi
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          <th className="py-3.5 px-5">ID Vindi</th>
+                          <th className="py-3.5 px-5">Produto / Descrição</th>
+                          <th className="py-3.5 px-5">Código (SKU)</th>
+                          <th className="py-3.5 px-5">Preço Unitário</th>
+                          <th className="py-3.5 px-5">Split Padrão</th>
+                          <th className="py-3.5 px-5">Status</th>
+                          <th className="py-3.5 px-5 text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                        {filteredProducts.map((prod) => (
+                          <tr key={prod.id} className="hover:bg-slate-50/70 transition">
+                            <td className="py-4 px-5 font-mono text-xs text-slate-500">#{prod.id}</td>
+                            <td className="py-4 px-5">
+                              <div className="font-bold text-slate-900">{prod.name}</div>
+                              {prod.description && (
+                                <div className="text-xs text-slate-500 mt-0.5 max-w-md">
+                                  {prod.description}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-4 px-5">
+                              <span className="font-mono text-xs px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                {prod.code}
+                              </span>
+                            </td>
+                            <td className="py-4 px-5 font-bold text-slate-900">
+                              {formatCurrency(prod.pricing_schema.price)}
+                              <span className="text-xs font-normal text-slate-400"> / {prod.unit}</span>
+                            </td>
+                            <td className="py-4 px-5">
+                              {prod.default_splits && prod.default_splits.length > 1 ? (
+                                <div className="space-y-1">
+                                  {prod.default_splits.map((sp, i) => {
+                                    const rec = recipients.find((r) => r.id === sp.recipient_id);
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="text-[11px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded inline-flex items-center gap-1 mr-1"
+                                      >
+                                        <span className="font-semibold">
+                                          {rec ? rec.name.split(' ')[0] : sp.recipient_id}:
+                                        </span>
+                                        <span>{sp.value}%</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-400">100% Conta Principal</span>
+                              )}
+                            </td>
+                            <td className="py-4 px-5">
+                              <button
+                                onClick={() => toggleProductStatus(prod.id)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition ${
+                                  prod.status === 'active'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                              >
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full ${
+                                    prod.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                                  }`}
+                                />
+                                {prod.status === 'active' ? 'Ativo' : 'Inativo'}
+                              </button>
+                            </td>
+                            <td className="py-4 px-5 text-right">
+                              <button
+                                onClick={() => {
+                                  const prodSplits =
+                                    prod.default_splits && prod.default_splits.length > 0
+                                      ? prod.default_splits.map((s) => ({
+                                          recipientId: s.recipient_id,
+                                          mode: s.mode || 'percentage',
+                                          value: s.value
+                                        }))
+                                      : [{ recipientId: 'rec_01', mode: 'percentage', value: 100 }];
+
+                                  setPixForm((prev) => ({
+                                    ...prev,
+                                    items: [{ productId: prod.id, quantity: 1 }],
+                                    splitEnabled: prodSplits.length > 1,
+                                    splits: prodSplits
+                                  }));
+                                  setActiveTab('pix');
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 transition"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                Cobrar via Pix
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================
+                  ABA 3.5: SPLIT DE PAGAMENTOS & RECEBEDORES
+              ============================================================ */}
+              {activeTab === 'recipients' && (
+                <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                        <GitFork className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold text-slate-900">
+                          Recebedores & Contas Vinculadas Vindi Split
+                        </h2>
+                        <p className="text-xs text-slate-500">
+                          Cadastre parceiros, sellers e prestadores com chave Pix ou conta bancária para repasses automáticos.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={openCreateRecipientModal}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Cadastrar Novo Recebedor
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {recipients.map((rec) => {
+                      const bal = recipientBalances[rec.id] || { paid: 0, pending: 0, count: 0 };
+                      return (
+                        <div
+                          key={rec.id}
+                          className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between space-y-4"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {rec.role}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-[11px] text-slate-400">
+                                  {rec.vindi_account_id}
+                                </span>
+                                <button
+                                  onClick={() => openEditRecipientModal(rec)}
+                                  className="text-[11px] font-semibold text-indigo-600 hover:underline ml-1"
+                                >
+                                  Editar
+                                </button>
+                                {rec.id !== 'rec_01' && (
+                                  <button
+                                    onClick={() => handleDeleteRecipient(rec.id)}
+                                    className="p-1 text-slate-400 hover:text-rose-600"
+                                    title="Excluir recebedor"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <h3 className="font-bold text-slate-900 text-base">{rec.name}</h3>
+                            <p className="text-xs font-mono text-slate-500 mt-1">
+                              CPF/CNPJ: {rec.document}
+                            </p>
+                            <p className="text-xs text-slate-600 mt-1 truncate">
+                              Chave Pix: <span className="font-mono">{rec.pix_key}</span>
+                            </p>
+                            {(rec.bank_name || rec.bank_account) && (
+                              <p className="text-[11px] text-slate-500 mt-1">
+                                Banco: {rec.bank_name} {rec.bank_agency ? `• Ag ${rec.bank_agency}` : ''}{' '}
+                                {rec.bank_account ? `• CC ${rec.bank_account}` : ''}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
+                            <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100">
+                              <span className="text-[10px] font-semibold uppercase text-emerald-700 block">
+                                Repassado (Pago)
+                              </span>
+                              <span className="text-sm font-black text-emerald-900">
+                                {formatCurrency(bal.paid)}
+                              </span>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-100">
+                              <span className="text-[10px] font-semibold uppercase text-amber-700 block">
+                                A Receber (Pendente)
+                              </span>
+                              <span className="text-sm font-black text-amber-900">
+                                {formatCurrency(bal.pending)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================
+                  ABA 4: CLIENTES
+              ============================================================ */}
+              {activeTab === 'customers' && (
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-base font-bold text-slate-900">Clientes Cadastrados</h2>
+                      <p className="text-xs text-slate-500">
+                        Pagadores habilitados para emissão de faturas Pix e assinaturas.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setIsCustomerModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700 transition"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Novo Cliente
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          <th className="py-3.5 px-5">ID</th>
+                          <th className="py-3.5 px-5">Nome / Razão Social</th>
+                          <th className="py-3.5 px-5">CPF / CNPJ</th>
+                          <th className="py-3.5 px-5">E-mail</th>
+                          <th className="py-3.5 px-5 text-right">Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                        {customers.map((cust) => (
+                          <tr key={cust.id} className="hover:bg-slate-50/70">
+                            <td className="py-3.5 px-5 font-mono text-xs text-slate-500">#{cust.id}</td>
+                            <td className="py-3.5 px-5 font-semibold text-slate-900">{cust.name}</td>
+                            <td className="py-3.5 px-5 font-mono text-xs text-slate-600">
+                              {cust.registry_code}
+                            </td>
+                            <td className="py-3.5 px-5 text-slate-600">{cust.email}</td>
+                            <td className="py-3.5 px-5 text-right">
+                              <button
+                                onClick={() => {
+                                  setPixForm((prev) => ({ ...prev, customerId: cust.id }));
+                                  setActiveTab('pix');
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                Gerar Pix
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ============================================================
+                  ABA 5: CONSOLE API REST V1 & WEBHOOKS
+              ============================================================ */}
+              {activeTab === 'api_logs' && (
+                <div className="bg-slate-900 text-slate-200 rounded-2xl border border-slate-800 overflow-hidden shadow-md">
+                  <div className="p-5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <Terminal className="w-5 h-5 text-teal-400" />
+                      <div>
+                        <h2 className="text-base font-bold text-white">
+                          Eventos API REST v1 & Webhooks Vindi
+                        </h2>
+                        <p className="text-xs text-slate-400">
+                          Payloads JSON em tempo real (POST /products, POST /bills, event: bill_paid)
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleResetDemoData}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 border border-slate-700"
+                      >
+                        Resetar Dados Demo
+                      </button>
+                      <button
+                        onClick={() => setIsConfigOpen(true)}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-teal-300 border border-slate-700"
+                      >
+                        Configurar Chave API Vindi
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-slate-800 max-h-[620px] overflow-y-auto font-mono text-xs">
+                    {apiLogs.map((log) => (
+                      <div key={log.id} className="p-5 space-y-2.5 hover:bg-slate-800/40">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                                log.type === 'WEBHOOK'
+                                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                  : log.type === 'API_ERROR'
+                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                  : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                              }`}
+                            >
+                              {log.type}
+                            </span>
+                            <span className="font-bold text-white">{log.method}</span>
+                            <span className="text-slate-300">{log.endpoint}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-emerald-400 font-semibold">
+                              HTTP {log.status || 'CORS'}
+                            </span>
+                            <span className="text-slate-500">{formatDate(log.timestamp)}</span>
+                          </div>
+                        </div>
+                        <pre className="p-3.5 rounded-xl bg-slate-950/90 text-slate-300 overflow-x-auto border border-slate-800/80 leading-relaxed">
+                          {JSON.stringify(log.payload, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </main>
+
+          {/* ================================================================
+              MODAL 1: CHECKOUT PIX / QR CODE DINÂMICO & SIMULAÇÃO DE PAGAMENTO
+          ================================================================ */}
+          {selectedBillForQR && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-fade-in">
+                <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-teal-500 text-slate-950 flex items-center justify-center font-bold">
+                      <QrCode className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm">Fatura Pix #{selectedBillForQR.id}</h3>
+                      <p className="text-[11px] text-slate-400 font-mono">{selectedBillForQR.txid}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setSelectedBillForQR(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-5 max-h-[85vh] overflow-y-auto">
+                  <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
+                    <div>
+                      <span className="text-xs text-slate-500 block">Valor a pagar</span>
+                      <span className="text-2xl font-black text-slate-900">
+                        {formatCurrency(selectedBillForQR.amount)}
+                      </span>
+                    </div>
+                    <div>{renderStatusBadge(selectedBillForQR.status)}</div>
+                  </div>
+
+                  <div className="flex flex-col items-center justify-center py-2">
+                    <PixQRCodeSVG value={selectedBillForQR.pix_qr_code} size={190} />
+                    <p className="text-xs text-slate-500 mt-3 text-center">
+                      Pagador: <strong className="text-slate-700">{selectedBillForQR.customer.name}</strong>
+                    </p>
+                  </div>
+
+                  {selectedBillForQR.split_enabled && selectedBillForQR.split_rules?.length > 0 && (
+                    <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                          <GitFork className="w-3.5 h-3.5 text-indigo-600" />
+                          Divisão de Recebimento (Split Pix)
+                        </span>
+                        <span className="text-[11px] font-semibold text-indigo-700">
+                          {selectedBillForQR.split_rules.length} recebedores
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {selectedBillForQR.split_rules.map((sp, i) => (
+                          <div
+                            key={i}
+                            className="flex items-center justify-between text-xs bg-white px-3 py-1.5 rounded-xl border border-indigo-100"
+                          >
+                            <span className="text-slate-700 font-medium truncate max-w-[230px]">
+                              {sp.recipient_name}
+                            </span>
+                            <span className="font-bold text-slate-900">
+                              {formatCurrency(sp.calculated_amount)}{' '}
+                              <span className="text-[10px] font-normal text-slate-400">
+                                ({sp.mode === 'percentage' ? `${sp.value}%` : 'Fixo'})
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Pix Copia e Cola (Código EMV BACEN)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={selectedBillForQR.pix_qr_code}
+                        className="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-xs font-mono text-slate-600"
+                      />
+                      <button
+                        onClick={() =>
+                          handleCopy(selectedBillForQR.pix_qr_code, 'Código Pix Copia e Cola copiado!')
+                        }
+                        className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition"
+                      >
+                        {copiedText === selectedBillForQR.pix_qr_code ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            Copiado
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            Copiar
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {selectedBillForQR.status === 'pending' ? (
+                    <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
+                      <button
+                        onClick={() => handleSimulatePixPayment(selectedBillForQR.id)}
+                        className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        Simular Pagamento Confirmado (Webhook)
+                      </button>
+                      <button
+                        onClick={() => handleCancelBill(selectedBillForQR.id)}
+                        className="py-3 px-4 rounded-xl border border-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-slate-600 font-semibold text-xs transition"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between">
+                      <span className="font-semibold">
+                        {selectedBillForQR.status === 'paid'
+                          ? `Liquidado em ${formatDate(selectedBillForQR.paid_at)}`
+                          : 'Cobrança cancelada.'}
+                      </span>
+                      <button
+                        onClick={() => setSelectedBillForQR(null)}
+                        className="font-bold underline"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================================================================
+              MODAL 2: CADASTRAR NOVO PRODUTO VINDI
+          ================================================================ */}
+          {isProductModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="p-5 border-b border-slate-200 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
+                      <Package className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">Novo Produto Vindi</h3>
+                      <p className="text-[11px] text-slate-500">POST /api/v1/products</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setIsProductModalOpen(false)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateProduct} className="p-6 space-y-4 overflow-y-auto">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nome do Produto *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Assinatura Enterprise Mensal"
+                      value={newProduct.name}
+                      onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Preço (R$) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        required
+                        placeholder="199.90"
+                        value={newProduct.price}
+                        onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Código SKU
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="PLAN-ENT-01"
+                        value={newProduct.code}
+                        onChange={(e) => setNewProduct({ ...newProduct, code: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Unidade</label>
+                      <select
+                        value={newProduct.unit}
+                        onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm"
+                      >
+                        <option value="unidade">Unidade</option>
+                        <option value="assinatura">Assinatura</option>
+                        <option value="serviço">Serviço</option>
+                        <option value="licença">Licença</option>
+                        <option value="hora">Hora</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
+                      <select
+                        value={newProduct.status}
+                        onChange={(e) => setNewProduct({ ...newProduct, status: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm"
+                      >
+                        <option value="active">Ativo</option>
+                        <option value="inactive">Inativo</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Descrição na Fatura
+                    </label>
+                    <textarea
+                      rows="2"
+                      placeholder="Detalhes exibidos ao cliente no checkout..."
+                      value={newProduct.description}
+                      onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  {/* Configuração de Split Padrão do Produto */}
+                  <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200/80 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                        <GitFork className="w-3.5 h-3.5 text-indigo-600" />
+                        Definir Split Padrão para este Produto
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={newProduct.useDefaultSplit}
+                        onChange={(e) =>
+                          setNewProduct({ ...newProduct, useDefaultSplit: e.target.checked })
+                        }
+                        className="rounded text-indigo-600"
+                      />
+                    </div>
+
+                    {newProduct.useDefaultSplit && (
+                      <div className="space-y-2">
+                        {newProduct.defaultSplits.map((sp, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <select
+                              value={sp.recipient_id}
+                              onChange={(e) => {
+                                const updated = [...newProduct.defaultSplits];
+                                updated[idx] = { ...updated[idx], recipient_id: e.target.value };
+                                setNewProduct({ ...newProduct, defaultSplits: updated });
+                              }}
+                              className="flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                            >
+                              {recipients.map((r) => (
+                                <option key={r.id} value={r.id}>
+                                  {r.name}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                value={sp.value}
+                                onChange={(e) => {
+                                  const updated = [...newProduct.defaultSplits];
+                                  updated[idx] = { ...updated[idx], value: Number(e.target.value) };
+                                  setNewProduct({ ...newProduct, defaultSplits: updated });
+                                }}
+                                className="w-16 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-bold text-right"
+                              />
+                              <span className="text-xs font-bold text-slate-600">%</span>
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setNewProduct({
+                                  ...newProduct,
+                                  defaultSplits: [
+                                    ...newProduct.defaultSplits,
+                                    {
+                                      recipient_id: recipients[0]?.id || 'rec_01',
+                                      mode: 'percentage',
+                                      value: 0
+                                    }
+                                  ]
+                                })
+                              }
+                              className="text-[11px] font-semibold text-indigo-700 hover:underline"
+                            >
+                              + Adicionar linha
+                            </button>
+                            <button
+                              type="button"
+                              onClick={openCreateRecipientModal}
+                              className="text-[11px] font-semibold text-teal-700 hover:underline"
+                            >
+                              + Novo recebedor
+                            </button>
+                          </div>
+                          <span className="text-[11px] font-semibold text-slate-600">
+                            Total:{' '}
+                            {newProduct.defaultSplits.reduce((a, b) => a + (Number(b.value) || 0), 0)}%
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsProductModalOpen(false)}
+                      className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-sm"
+                    >
+                      Salvar Produto
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ================================================================
+              MODAL 2.5: CADASTRAR / EDITAR RECEBEDOR (SPLIT)
+          ================================================================ */}
+          {isRecipientModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="p-5 border-b border-slate-200 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                      <GitFork className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">
+                        {editingRecipientId
+                          ? 'Editar Recebedor Split Vindi'
+                          : 'Cadastrar Novo Recebedor Split'}
+                      </h3>
+                      <p className="text-[11px] text-slate-500">POST /api/v1/split_recipients</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setIsRecipientModalOpen(false);
+                      setEditingRecipientId(null);
+                    }}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateRecipient} className="p-6 space-y-4 overflow-y-auto">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nome Completo / Razão Social do Recebedor *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Parceiro Comercial Sul Ltda"
+                      value={newRecipient.name}
+                      onChange={(e) => setNewRecipient({ ...newRecipient, name: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        CPF / CNPJ *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="00.000.000/0001-00"
+                        value={newRecipient.document}
+                        onChange={(e) =>
+                          setNewRecipient({ ...newRecipient, document: e.target.value })
+                        }
+                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Papel / Categoria no Split
+                      </label>
+                      <select
+                        value={newRecipient.role}
+                        onChange={(e) => setNewRecipient({ ...newRecipient, role: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
+                      >
+                        <option value="Seller / Parceiro">Seller / Parceiro</option>
+                        <option value="Prestador">Prestador de Serviço</option>
+                        <option value="Afiliado">Afiliado / Comissionado</option>
+                        <option value="Fornecedor">Fornecedor</option>
+                        <option value="Franquia">Franquia / Unidade</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Tipo Chave Pix
+                      </label>
+                      <select
+                        value={newRecipient.pix_key_type}
+                        onChange={(e) =>
+                          setNewRecipient({ ...newRecipient, pix_key_type: e.target.value })
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs"
+                      >
+                        <option value="cnpj">CNPJ / CPF</option>
+                        <option value="email">E-mail</option>
+                        <option value="phone">Telefone</option>
+                        <option value="evp">Chave Aleatória</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Chave Pix de Repasse *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Informe a chave Pix para liquidação"
+                        value={newRecipient.pix_key}
+                        onChange={(e) => setNewRecipient({ ...newRecipient, pix_key: e.target.value })}
+                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      E-mail para Notificação de Repasse
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="financeiro@parceiro.com.br"
+                      value={newRecipient.email}
+                      onChange={(e) => setNewRecipient({ ...newRecipient, email: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                      Domicílio Bancário & Conta Vindi (Opcional)
+                    </span>
+                    <div className="grid grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Banco (ex: Itaú)"
+                        value={newRecipient.bank_name}
+                        onChange={(e) => setNewRecipient({ ...newRecipient, bank_name: e.target.value })}
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Agência"
+                        value={newRecipient.bank_agency}
+                        onChange={(e) =>
+                          setNewRecipient({ ...newRecipient, bank_agency: e.target.value })
+                        }
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Conta c/ dígito"
+                        value={newRecipient.bank_account}
+                        onChange={(e) =>
+                          setNewRecipient({ ...newRecipient, bank_account: e.target.value })
+                        }
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="ID da Conta Vindi (gerado automaticamente se vazio)"
+                      value={newRecipient.vindi_account_id}
+                      onChange={(e) =>
+                        setNewRecipient({ ...newRecipient, vindi_account_id: e.target.value })
+                      }
+                      className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRecipientModalOpen(false);
+                        setEditingRecipientId(null);
+                      }}
+                      className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+                    >
+                      {editingRecipientId ? 'Salvar Alterações' : 'Cadastrar Recebedor'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ================================================================
+              MODAL 3: CADASTRAR NOVO CLIENTE
+          ================================================================ */}
+          {isCustomerModalOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+                <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                  <h3 className="font-bold text-sm text-slate-900">Novo Cliente Vindi</h3>
+                  <button
+                    onClick={() => setIsCustomerModalOpen(false)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateCustomer} className="p-6 space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nome Completo / Razão Social *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Empresa Exemplo Ltda"
+                      value={newCustomer.name}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      E-mail Financeiro *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="financeiro@empresa.com.br"
+                      value={newCustomer.email}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      CPF ou CNPJ
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="00.000.000/0001-00"
+                      value={newCustomer.registry_code}
+                      onChange={(e) =>
+                        setNewCustomer({ ...newCustomer, registry_code: e.target.value })
+                      }
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-mono"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomerModalOpen(false)}
+                      className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white"
+                    >
+                      Cadastrar Cliente
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ================================================================
+              MODAL 4: CONFIGURAÇÕES DA API VINDI (SANDBOX / LIVE)
+          ================================================================ */}
+          {isConfigOpen && (
+            <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden">
+                <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="w-5 h-5 text-teal-600" />
+                    <h3 className="font-bold text-sm text-slate-900">
+                      Integração API REST v1 — Vindi
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setIsConfigOpen(false)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setApiMode('sandbox')}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        apiMode === 'sandbox'
+                          ? 'border-teal-600 bg-teal-50/70 text-teal-950'
+                          : 'border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      <div className="text-xs font-bold">Sandbox Local (Recomendado)</div>
+                      <div className="text-[11px] opacity-80 mt-1">
+                        Ideal para GitHub Pages: gera QR Codes Pix, salva no navegador e simula webhooks.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setApiMode('live')}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        apiMode === 'live'
+                          ? 'border-teal-600 bg-teal-50/70 text-teal-950'
+                          : 'border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      <div className="text-xs font-bold">API Vindi Real (REST v1)</div>
+                      <div className="text-[11px] opacity-80 mt-1">
+                        Envia chamadas autenticadas com sua API Key da Vindi.
+                      </div>
+                    </button>
+                  </div>
+
+                  {apiMode === 'live' && (
+                    <div className="space-y-3 pt-2">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Ambiente Vindi
+                        </label>
+                        <select
+                          value={apiEnvironment}
+                          onChange={(e) => setApiEnvironment(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-mono"
+                        >
+                          <option value="https://sandbox-app.vindi.com.br/api/v1">
+                            Sandbox (https://sandbox-app.vindi.com.br/api/v1)
+                          </option>
+                          <option value="https://app.vindi.com.br/api/v1">
+                            Produção (https://app.vindi.com.br/api/v1)
+                          </option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Chave Privada da API (Vindi API Key)
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="Cole sua chave secreta da Vindi..."
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs font-mono"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      onClick={() => {
+                        setIsConfigOpen(false);
+                        showToast(
+                          apiMode === 'live'
+                            ? 'Configuração de API Real salva!'
+                            : 'Modo Sandbox Local ativado!'
+                        );
+                      }}
+                      className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
+                    >
+                      Concluir Configuração
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
+```
